@@ -1,0 +1,60 @@
+# Project Requirements: Rust Asteroids
+
+## 1. Overview
+The project is a 2D space shooter game "Rust Asteroids" developed in Rust using the `macroquad` game engine. The player controls a spaceship to destroy asteroids and UFOs, accumulating score while avoiding collisions.
+
+## 2. Technical Requirements
+- **Language**: Rust (2021 Edition)
+- **Engine**: Macroquad 0.4.x (with `features = ["audio"]`)
+- **OS Support**: Windows (Primary), Cross-platform capable
+- **Architecture**:
+  - Modular design splitting concerns into:
+    - `main.rs`: Game loop and state management.
+    - `components.rs`: ECS-style data structures (Player, Asteroid, Bullet, etc.).
+    - `physics.rs`: Pure functions for collision and movement logic (testable).
+    - `level.rs`: Level generation and entity spawning.
+    - `config.rs`: Game configuration and tuning.
+    - `resources.rs`: Asset loading and audio management.
+
+## 3. Gameplay Mechanics
+- **Player Controller**:
+  - Thrust-based movement with inertia.
+  - Rotation (Left/Right inputs).
+  - Screen wrapping: Entities leaving one side appear on the opposite side.
+  - Weapon systems: Projectile firing with cooldowns.
+  
+- **Entities**:
+  - **Asteroids**: 
+    - Randomly generated velocities and drift.
+    - Break into smaller fragments when destroyed.
+    - Variable sizes (Large, Medium, Small).
+  - **UFOs**:
+    - Hostile targets moving across the screen.
+    - Cause damage on impact.
+
+- **Game State**:
+  - **Lives System**: Player starts with 3 lives. Collisions reduce lives; 0 lives results in Game Over.
+  - **Scoring**: Points awarded for destroying targets.
+  - **Progression**: Level-based difficulty scaling (defined in `config.rs`).
+  - **Win/Loss Conditions**: Distinct "Game Over" and "You Win" screens with Restart (R) or Quit (Esc) options.
+
+## 4. Audio & Assets
+- **Sound Effects**:
+  - `shoot.wav`: Firing weapon.
+  - `bang.wav`: Entity destruction/collision.
+  - `warp.wav`: Thrust/Movement events.
+- **Asset Management**: central resource loader verifying file existence on startup.
+
+## 5. "Secret" Design Mode (Feature Request)
+A developer tool hidden within the game to customize the player avatar in real-time.
+- **Activation**: Toggle via 'D' key.
+- **Functionality**:
+  - **Shape Editor**: Modify the polygon vertex count (sides) using Left/Right arrows.
+  - **Size Editor**: Adjust ship radius using Up/Down arrows.
+  - **Livery Editor**: Cycle through available colors using 'C' key.
+- **Persistence**: Changes applied in this mode must immediately reflect in the active gameplay session.
+
+## 6. Code Quality & Testing
+- **Unit Testing**: Physics calculations (collision, wrapping) must be covered by `#[test]` modules.
+- **Logging**: Application must output structured logs (`info!`, `warn!`, `error!`) to the terminal for debugging life-cycle events (asset loading, collisions, game over).
+
