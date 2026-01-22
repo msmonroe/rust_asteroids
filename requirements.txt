@@ -43,7 +43,7 @@ The project is a 2D space shooter game "Rust Asteroids" developed in Rust using 
   - `shoot.wav`: Firing weapon.
   - `bang.wav`: Entity destruction/collision.
   - `warp.wav`: Thrust/Movement events.
-- **Asset Management**: central resource loader verifying file existence on startup.
+- **Asset Management**: Audio files are embedded into the executable at compile time using `include_bytes!`.
 
 ## 5. "Secret" Design Mode (Feature Request)
 A developer tool hidden within the game to customize the player avatar in real-time.
@@ -54,7 +54,27 @@ A developer tool hidden within the game to customize the player avatar in real-t
   - **Livery Editor**: Cycle through available colors using 'C' key.
 - **Persistence**: Changes applied in this mode must immediately reflect in the active gameplay session.
 
-## 6. Code Quality & Testing
-- **Unit Testing**: Physics calculations (collision, wrapping) must be covered by `#[test]` modules.
-- **Logging**: Application must output structured logs (`info!`, `warn!`, `error!`) to the terminal for debugging life-cycle events (asset loading, collisions, game over).
+## 6. Visual Feedback
+- **Ship Tip Highlight**: A colored marker indicates the bullet origin point.
+- **Engine Flame**: A flickering flame appears while thrusting forward.
+- **Ghost Respawn**: After taking damage, the ship respawns randomly and blinks with temporary invulnerability.
+- **Particle Effects**: Explosions and muzzle flashes use a background worker to generate particles.
+
+## 7. Multitasking Demonstration
+- **Background Scan**: Pressing `S` launches a background thread that returns a bonus result without blocking the game loop.
+
+## 8. UI Screens
+- **Title Screen**: Start screen with Start/Settings/Quit options.
+- **Pause Menu**: Stops gameplay and allows Settings/Resume/Title.
+- **Settings Screen**: Configures volume, difficulty, and FPS overlay.
+
+## 9. Settings Persistence
+- **settings.cfg**: Settings load asynchronously at startup and are saved on exit from the Settings menu.
+- **Difficulty Scaling**: Affects asteroid speed range, UFO speed, and spawn rate.
+- **Volume**: Master volume applied to all sound effects.
+
+## 10. Code Quality & Testing
+- **Unit Testing**: Physics calculations (collision, wrapping, scoring) and config validation must be covered by `#[test]` modules.
+- **Logging**: Application must output structured logs (`info!`, `warn!`, `error!`) to the terminal for debugging life-cycle events (embedded asset loading, respawns, collisions, background scan completion, and game over).
+- **Error Checking**: Level configs must be validated (non-negative speeds, valid spawn rates, positive size multiplier). Unknown sound names should log a warning.
 

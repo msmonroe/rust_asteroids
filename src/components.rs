@@ -23,6 +23,10 @@ pub struct Player {
     pub sides: u8,
     /// Color of the ship
     pub color: Color,
+    /// Is the player currently invulnerable?
+    pub invulnerable: bool,
+    /// How long until invulnerability wears off
+    pub invulnerable_timer: f32,
 }
 
 /// Represents a projectile fired by an entity.

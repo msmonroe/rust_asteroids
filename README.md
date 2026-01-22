@@ -10,6 +10,12 @@ A classic arcade shooter implemented in Rust using the [Macroquad](https://macro
 -   **Hyperspace**: Emergency teleport system (Shift) for tight spots.
 -   **Level Progression**: 3 distinct levels with increasing difficulty, asteroid count, and speed.
 -   **Score System**: Track your high score.
+-   **Ship Customizer (Secret Tool)**: Live-edit ship color, size, and polygon sides.
+-   **Ghost Respawn**: Temporary invulnerability with transparency after taking damage.
+-   **Engine Flame + Tip Highlight**: Visual feedback for thrust and bullet origin.
+-   **Background Scan Demo**: Multithreading example that awards bonus points.
+-   **Title + Pause + Settings Menus**: Start screen, pause overlay, and configurable options.
+-   **Particle Effects**: Explosions and muzzle flashes with async generation.
 
 ## Controls
 
@@ -19,8 +25,21 @@ A classic arcade shooter implemented in Rust using the [Macroquad](https://macro
 | **Rotate** | `Left Arrow` / `Right Arrow` |
 | **Shoot** | `Space` |
 | **Hyperspace** | `Left Shift` |
+| **Design Mode** | `D` |
+| **Design: Change Color** | `C` |
+| **Background Scan** | `S` |
+| **Pause / Resume** | `P` |
+| **Start Game** | `Enter` (Title screen) |
+| **Settings** | `S` (Title / Pause) |
 | **Quit** | `Esc` |
 | **Restart** | `R` (on Game Over screen) |
+
+### Settings Menu Controls
+
+- **Volume**: Left / Right
+- **Difficulty**: Up / Down
+- **Show FPS**: F
+- **Save / Return**: Enter (or Esc)
 
 ## Prerequisites
 
@@ -40,6 +59,24 @@ You need to have **Rust** and **Cargo** installed on your machine. If you haven'
     ```
     *Note: The first build might take a minute as it compiles dependencies.*
 
+## Building a Standalone Executable
+
+This project embeds its audio assets directly into the executable at compile time, so the release build is fully standalone.
+
+```bash
+cargo build --release
+```
+
+The executable will be located at:
+`target/release/rust_asteroids.exe`
+
+**Important:** The `assets/` folder is only needed at build time (for embedding). You do not need to ship it alongside the `.exe`.
+
+## Settings File
+
+The game loads settings from `settings.cfg` on startup (non-blocking), and writes changes back when you exit the Settings menu.
+If the file is missing or invalid, defaults are used.
+
 ## Game Rules
 
 -   **Objective**: Clear the screen of all asteroids and UFOs to advance to the next level.
@@ -48,6 +85,7 @@ You need to have **Rust** and **Cargo** installed on your machine. If you haven'
     -   Asteroids: 100 points
     -   UFOs: 500 points
 -   **Hyperspace**: Teleports you to a random location on the screen. **Warning**: You retain 0 velocity upon exit, but you might teleport directly into danger!
+-   **Ghost Respawn**: After being hit, your ship respawns randomly and is temporarily invulnerable with a transparent blink.
 
 ## Testing & Instrumentation
 
@@ -59,10 +97,10 @@ cargo test
 ```
 
 **Logging:**
-The game logs key events (Startup, Assets, Score Milestones, Errors) to the console using `info!` and `warn!` macros.
--   **Startup**: Checks current working directory and asset availability.
--   **Runtime**: Logs "Game Over" reasons and Extra Lives.
--   **Errors**: Logs missing audio files or invalid configurations.
+The game logs key events (Startup, Score Milestones, Respawns, Errors) to the console using `info!` and `warn!` macros.
+-   **Startup**: Logs embedded asset loading and configuration validation.
+-   **Runtime**: Logs background scan rewards, respawns, extra lives, and game-over reasons.
+-   **Errors**: Logs invalid configurations and unknown sound requests.
 
 ## Project Structure
 
@@ -77,12 +115,11 @@ The code is modularized for readability and maintainability:
 
 ## Assets
 
-The game looks for audio files in an `assets/` folder:
+Audio files are embedded directly into the executable:
 -   `shoot.wav`
 -   `bang.wav`
 -   `warp.wav`
-
-*If these files are missing, the game will still run silently.*
+*The `assets/` folder is required only when compiling the project.*
 
 ## Built With
 

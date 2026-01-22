@@ -3,31 +3,44 @@ mod config;
 mod resources;
 mod physics;
 mod level;
+mod settings;
+mod ui;
+mod particles;
 
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
-use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use components::*;
 use config::get_levels;
 use resources::Resources;
 use physics::*;
 use level::load_level;
+use settings::Settings;
+use ui::{draw_pause_screen, draw_settings_screen, draw_title_screen};
+use particles::{ParticleSpawnBridge, ParticleSystem, SpawnRequest};
+
+#[derive(Clone, Copy, PartialEq)]
+enum GameState {
+    Title,
+    Playing,
+    Paused,
+    Settings,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SettingsOrigin {
+    Title,
+    Pause,
+}
 
 /// Main Entry Point
 #[macroquad::main("Rust Asteroids")]
 async fn main() {
     info!("Starting Rust Asteroids");
-    
-    // Debug: Check Working Directory and Assets
-    if let Ok(cwd) = std::env::current_dir() {
-        info!("Current Working Directory: {:?}", cwd);
-        if Path::new("assets/shoot.wav").exists() {
-             info!("Asset check: 'assets/shoot.wav' FOUND.");
-        } else {
-             error!("Asset check: 'assets/shoot.wav' NOT FOUND. Make sure you run from the project root!");
-        }
-    }
+    info!("Running in Standalone Mode (Assets Embedded)");
 
     let levels = get_levels();
     
@@ -45,7 +58,18 @@ async fn main() {
     let mut current_level_idx = 0;
     
     // Load Audio Resources safely
-    let resources = Resources::load().await;
+    let mut resources = Resources::load().await;
+
+    // Settings (loaded on background thread)
+    let settings_path = "settings.cfg".to_string();
+    let (settings_tx, settings_rx) = mpsc::channel();
+    let settings_path_clone = settings_path.clone();
+    thread::spawn(move || {
+        let result = Settings::load_from_file(&settings_path_clone);
+        let _ = settings_tx.send(result);
+    });
+    let mut settings = Settings::default();
+    let mut settings_rx = Some(settings_rx);
 
     // Game State initialization
     let mut score = 0;
@@ -59,6 +83,8 @@ async fn main() {
         active: true,
         sides: 3,
         color: WHITE,
+        invulnerable: false,
+        invulnerable_timer: 0.,
     };
     
     let mut design_mode = false;
@@ -72,10 +98,130 @@ async fn main() {
     let mut game_over = false;
     let mut game_won = false;
 
-    // Initial Level Load
-    load_level(&levels[current_level_idx], &mut asteroids, &mut ufos);
+    let mut game_state = GameState::Title;
+    let mut settings_origin = SettingsOrigin::Title;
+
+    // Multitasking Demo: Background Scanner
+    let mut is_scanning = false;
+    let mut scan_receiver: Option<mpsc::Receiver<String>> = None;
+    let mut scan_message = String::new();
+    let mut scan_message_timer = 0.0;
+
+    // Particle system + spawn bridge (background generation)
+    let mut particle_system = ParticleSystem::new();
+    let particle_spawner = ParticleSpawnBridge::new();
+
+    // Initial Level Load (uses default settings until loaded)
+    let initial_cfg = levels[current_level_idx].scaled(
+        settings.difficulty.speed_multiplier(),
+        settings.difficulty.spawn_multiplier(),
+    );
+    load_level(&initial_cfg, &mut asteroids, &mut ufos);
 
     loop {
+        // Check for async settings load
+        if let Some(rx) = &settings_rx {
+            if let Ok(result) = rx.try_recv() {
+                settings_rx = None;
+                match result {
+                    Ok(loaded) => {
+                        settings = loaded;
+                        resources.set_volume(settings.volume);
+                        info!("Settings loaded: volume={:.2}, difficulty={:?}, show_fps={}", settings.volume, settings.difficulty, settings.show_fps);
+                    }
+                    Err(err) => {
+                        warn!("Using default settings. Reason: {}", err);
+                    }
+                }
+            }
+        }
+
+        // Collect particle batches from background worker
+        if let Some(batch) = particle_spawner.try_receive() {
+            particle_system.spawn_batch(batch);
+        }
+
+        // --- TITLE / PAUSE / SETTINGS SCREENS ---
+        if game_state == GameState::Title {
+            draw_title_screen();
+            if is_key_pressed(KeyCode::Enter) {
+                info!("Title -> Playing");
+                game_state = GameState::Playing;
+            }
+            if is_key_pressed(KeyCode::S) {
+                info!("Title -> Settings");
+                settings_origin = SettingsOrigin::Title;
+                game_state = GameState::Settings;
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                break;
+            }
+            next_frame().await;
+            continue;
+        }
+
+        if game_state == GameState::Settings {
+            draw_settings_screen(&settings);
+
+            if is_key_pressed(KeyCode::Left) {
+                settings.volume = (settings.volume - 0.05).clamp(0.0, 1.0);
+                resources.set_volume(settings.volume);
+                info!("Settings volume changed: {:.2}", settings.volume);
+            }
+            if is_key_pressed(KeyCode::Right) {
+                settings.volume = (settings.volume + 0.05).clamp(0.0, 1.0);
+                resources.set_volume(settings.volume);
+                info!("Settings volume changed: {:.2}", settings.volume);
+            }
+            if is_key_pressed(KeyCode::Up) {
+                settings.difficulty = settings.difficulty.next();
+                info!("Settings difficulty changed: {:?}", settings.difficulty);
+            }
+            if is_key_pressed(KeyCode::Down) {
+                settings.difficulty = settings.difficulty.prev();
+                info!("Settings difficulty changed: {:?}", settings.difficulty);
+            }
+            if is_key_pressed(KeyCode::F) {
+                settings.show_fps = !settings.show_fps;
+                info!("Settings show_fps toggled: {}", settings.show_fps);
+            }
+
+            if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Escape) {
+                let save_settings = settings.clone();
+                let save_path = settings_path.clone();
+                thread::spawn(move || {
+                    let _ = save_settings.save_to_file(&save_path);
+                });
+                info!("Settings saved. Returning from settings menu.");
+                game_state = match settings_origin {
+                    SettingsOrigin::Title => GameState::Title,
+                    SettingsOrigin::Pause => GameState::Paused,
+                };
+            }
+
+            next_frame().await;
+            continue;
+        }
+
+        if game_state == GameState::Paused {
+            draw_pause_screen();
+            if is_key_pressed(KeyCode::P) {
+                info!("Paused -> Playing");
+                game_state = GameState::Playing;
+            }
+            if is_key_pressed(KeyCode::S) {
+                info!("Paused -> Settings");
+                settings_origin = SettingsOrigin::Pause;
+                game_state = GameState::Settings;
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                info!("Paused -> Title");
+                game_state = GameState::Title;
+            }
+            next_frame().await;
+            continue;
+        }
+
         // --- GAME OVER / WIN SCREEN ---
         if game_over || game_won {
             clear_background(BLACK);
@@ -92,11 +238,19 @@ async fn main() {
                 last_extra_life_score = 0;
                 game_over = false;
                 game_won = false;
+                game_state = GameState::Playing;
                 player.pos = vec2(screen_width() / 2., screen_height() / 2.);
                 player.vel = vec2(0., 0.);
                 player.active = true;
+                player.invulnerable = true;
+                player.invulnerable_timer = 3.0;
+                info!("Restart: player respawned at center with 3s invulnerability.");
                 bullets.clear();
-                load_level(&levels[current_level_idx], &mut asteroids, &mut ufos);
+                let restart_cfg = levels[current_level_idx].scaled(
+                    settings.difficulty.speed_multiplier(),
+                    settings.difficulty.spawn_multiplier(),
+                );
+                load_level(&restart_cfg, &mut asteroids, &mut ufos);
             }
 
             if is_key_pressed(KeyCode::Escape) {
@@ -107,9 +261,44 @@ async fn main() {
             continue;
         }
 
+        // --- MULTITASKING: BACKGROUND SCANNER ---
+        // Press 'S' to offload a task to another thread
+        if !is_scanning && is_key_pressed(KeyCode::S) {
+            info!("Starting background scan...");
+            is_scanning = true;
+            scan_message = "Scanning Deep Space...".to_string();
+            
+            let (tx, rx) = mpsc::channel();
+            scan_receiver = Some(rx);
+
+            // Spawn a separate OS thread to do "heavy work" without freezing the game
+            thread::spawn(move || {
+                // Simulate heavy calculation (blocking this thread)
+                thread::sleep(Duration::from_secs(2)); 
+                // Send result back to main thread
+                let _ = tx.send("Sector Analysis Complete: Data Cache Found! +500 pts".to_string());
+            });
+        }
+
+        // Check for results from the thread every frame
+        if is_scanning {
+            if let Some(rx) = &scan_receiver {
+                if let Ok(msg) = rx.try_recv() {
+                    // Message received! Thread has finished.
+                    is_scanning = false;
+                    scan_message = msg;
+                    scan_message_timer = 3.0; // Show result for 3 seconds
+                    score += 500;
+                    info!("Background scan complete. Bonus awarded. Score: {}", score);
+                    // resources.play("warp"); // Optional: Audio feedback
+                }
+            }
+        }
+
         // --- DESIGN MODE (Secret Tool) ---
         if is_key_pressed(KeyCode::D) {
             design_mode = !design_mode;
+            info!("Design mode toggled: {}", if design_mode { "ON" } else { "OFF" });
             // Reset velocity if entering design mode to prevent drifting while editing
             if design_mode {
                 player.vel = vec2(0., 0.);
@@ -156,13 +345,17 @@ async fn main() {
         }
 
         let level_cfg = &levels[current_level_idx];
+        let effective_cfg = level_cfg.scaled(
+            settings.difficulty.speed_multiplier(),
+            settings.difficulty.spawn_multiplier(),
+        );
 
         // --- SPAWN LOGIC (UFO) ---
-        if ufos.len() < 1 && gen_range(0.0, 1.0) < level_cfg.ufo_spawn_chance {
+        if ufos.len() < 1 && gen_range(0.0, 1.0) < effective_cfg.ufo_spawn_chance {
             resources.play("warp"); // Sound cue for UFO entry
             ufos.push(Ufo {
                 pos: vec2(0., gen_range(0., screen_height())), 
-                vel: vec2(level_cfg.ufo_speed, 0.),
+                vel: vec2(effective_cfg.ufo_speed, 0.),
                 radius: 20.,
                 active: true,
                 shoot_timer: 0.,
@@ -175,17 +368,40 @@ async fn main() {
             current_level_idx += 1;
             if current_level_idx >= levels.len() {
                 game_won = true;
+                info!("All levels cleared. Game won.");
             } else {
+                info!("Level complete. Advancing to level {}", current_level_idx + 1);
                 player.pos = vec2(screen_width() / 2., screen_height() / 2.);
                 player.vel = vec2(0., 0.);
                 bullets.clear();
-                load_level(&levels[current_level_idx], &mut asteroids, &mut ufos);
+                let next_cfg = levels[current_level_idx].scaled(
+                    settings.difficulty.speed_multiplier(),
+                    settings.difficulty.spawn_multiplier(),
+                );
+                load_level(&next_cfg, &mut asteroids, &mut ufos);
+            }
+        }
+
+        // --- PRE-INPUT UPDATES ---
+        // Invulnerability countdown (used after respawn to avoid instant re-hit)
+        if player.invulnerable {
+            player.invulnerable_timer -= get_frame_time();
+            if player.invulnerable_timer <= 0.0 {
+                player.invulnerable = false;
+                info!("Invulnerability ended.");
             }
         }
 
         // --- INPUT ---
         if is_key_pressed(KeyCode::Escape) {
             break;
+        }
+
+        if is_key_pressed(KeyCode::P) {
+            info!("Playing -> Paused");
+            game_state = GameState::Paused;
+            next_frame().await;
+            continue;
         }
 
         let rotation_speed = 4.0;
@@ -210,6 +426,16 @@ async fn main() {
                 active: true,
                 owner: BulletOwner::Player,
             });
+            info!("Player fired. Bullets active: {}", bullets.len());
+
+            particle_spawner.request(SpawnRequest {
+                pos: player.pos + direction * player.radius,
+                color: YELLOW,
+                count: 8,
+                speed: 80.0,
+                life: 0.25,
+                size: 2.0,
+            });
         }
 
         // HYPERSPACE (Shift Key)
@@ -217,6 +443,7 @@ async fn main() {
             resources.play("warp");
             player.pos = vec2(gen_range(0., screen_width()), gen_range(0., screen_height()));
             player.vel = vec2(0., 0.); // Reset velocity for safety
+            info!("Hyperspace jump to ({:.1}, {:.1})", player.pos.x, player.pos.y);
         }
 
         // --- PHYSICS & UPDATES ---
@@ -225,6 +452,9 @@ async fn main() {
         player.pos += player.vel;
         player.vel *= 0.98; // Friction
         player.pos = wrap_screen(player.pos);
+
+        // Particles
+        particle_system.update(get_frame_time());
 
         // Bullets
         for bullet in bullets.iter_mut() {
@@ -248,7 +478,7 @@ async fn main() {
             ufo.shoot_timer += get_frame_time();
 
             if ufo.change_dir_timer > 2.0 {
-                ufo.vel.y = gen_range(-1.0, 1.0) * level_cfg.ufo_speed;
+                ufo.vel.y = gen_range(-1.0, 1.0) * effective_cfg.ufo_speed;
                 ufo.change_dir_timer = 0.;
             }
 
@@ -291,6 +521,14 @@ async fn main() {
                     if bullet.owner == BulletOwner::Player { 
                         score += 100; 
                         info!("Asteroid destroyed. Score: {}", score);
+                        particle_spawner.request(SpawnRequest {
+                            pos: asteroid.pos,
+                            color: GRAY,
+                            count: 28,
+                            speed: 120.0,
+                            life: 0.9,
+                            size: 2.5,
+                        });
                     }
 
                     // Split asteroid
@@ -320,23 +558,45 @@ async fn main() {
                         resources.play("bang");
                         score += 500; 
                         info!("UFO destroyed. Score: {}", score);
+                        particle_spawner.request(SpawnRequest {
+                            pos: ufo.pos,
+                            color: RED,
+                            count: 32,
+                            speed: 140.0,
+                            life: 0.8,
+                            size: 3.0,
+                        });
                     }
                 }
             }
 
             // Bullet vs Player
             if bullet.active && bullet.owner == BulletOwner::Ufo {
-                 if check_collision(bullet.pos, 0., player.pos, player.radius) {
+                 if !player.invulnerable && check_collision(bullet.pos, 0., player.pos, player.radius) {
                      resources.play("bang");
                      lives -= 1;
                      bullet.active = false;
+                     particle_spawner.request(SpawnRequest {
+                         pos: player.pos,
+                         color: ORANGE,
+                         count: 30,
+                         speed: 160.0,
+                         life: 0.9,
+                         size: 3.0,
+                     });
                      if lives <= 0 {
                          game_over = true;
                          warn!("Game Over: Player hit by UFO bullet. Lives: 0");
                      } else {
                          warn!("Player hit by UFO bullet. Lives remaining: {}", lives);
-                         player.pos = vec2(screen_width() / 2., screen_height() / 2.);
+                         player.pos = vec2(gen_range(0., screen_width()), gen_range(0., screen_height()));
                          player.vel = vec2(0., 0.);
+                         player.invulnerable = true;
+                         player.invulnerable_timer = 3.0;
+                         info!(
+                             "Respawned after UFO bullet at ({:.1}, {:.1}) with 3s invulnerability.",
+                             player.pos.x, player.pos.y
+                         );
                      }
                  }
             }
@@ -347,10 +607,18 @@ async fn main() {
             if !asteroid.active { continue; }
             
             // Player vs Asteroid
-            if check_collision(player.pos, player.radius, asteroid.pos, asteroid.radius) {
+            if !player.invulnerable && check_collision(player.pos, player.radius, asteroid.pos, asteroid.radius) {
                 resources.play("bang");
                 lives -= 1;
                 asteroid.active = false; // Destroy asteroid on impact
+                particle_spawner.request(SpawnRequest {
+                    pos: player.pos,
+                    color: ORANGE,
+                    count: 30,
+                    speed: 160.0,
+                    life: 0.9,
+                    size: 3.0,
+                });
 
                 // Split implicitly if large
                 if asteroid.radius > 15.0 {
@@ -371,8 +639,14 @@ async fn main() {
                      warn!("Game Over: Player hit by asteroid. Lives: 0");
                 } else {
                      warn!("Player hit by asteroid. Lives remaining: {}", lives);
-                     player.pos = vec2(screen_width() / 2., screen_height() / 2.);
+                     player.pos = vec2(gen_range(0., screen_width()), gen_range(0., screen_height()));
                      player.vel = vec2(0., 0.);
+                     player.invulnerable = true;
+                     player.invulnerable_timer = 3.0;
+                     info!(
+                        "Respawned after asteroid at ({:.1}, {:.1}) with 3s invulnerability.",
+                        player.pos.x, player.pos.y
+                     );
                 }
                 // We break here to avoid processing this asteroid more in this frame (though it is marked inactive now)
                 // Need to be careful with double mutations if we didn't use continue
@@ -405,23 +679,45 @@ async fn main() {
 
                     resources.play("bang");
                     info!("UFO collided with asteroid.");
+                    particle_spawner.request(SpawnRequest {
+                        pos: asteroid.pos,
+                        color: GRAY,
+                        count: 24,
+                        speed: 120.0,
+                        life: 0.8,
+                        size: 2.5,
+                    });
                 }
             }
         }
         
         // Player vs UFO
         for ufo in ufos.iter_mut() {
-            if ufo.active && check_collision(player.pos, player.radius, ufo.pos, ufo.radius) {
+            if ufo.active && !player.invulnerable && check_collision(player.pos, player.radius, ufo.pos, ufo.radius) {
                 ufo.active = false; // Destroy UFO
                 resources.play("bang");
                 lives -= 1;
+                particle_spawner.request(SpawnRequest {
+                    pos: player.pos,
+                    color: ORANGE,
+                    count: 30,
+                    speed: 160.0,
+                    life: 0.9,
+                    size: 3.0,
+                });
                 if lives <= 0 {
                     game_over = true;
                     warn!("Game Over: Player hit by UFO. Lives: 0");
                 } else {
                     warn!("Player hit by UFO. Lives remaining: {}", lives);
-                    player.pos = vec2(screen_width() / 2., screen_height() / 2.);
+                    player.pos = vec2(gen_range(0., screen_width()), gen_range(0., screen_height()));
                     player.vel = vec2(0., 0.);
+                    player.invulnerable = true;
+                    player.invulnerable_timer = 3.0;
+                    info!(
+                        "Respawned after UFO collision at ({:.1}, {:.1}) with 3s invulnerability.",
+                        player.pos.x, player.pos.y
+                    );
                 }
             }
         }
@@ -435,7 +731,46 @@ async fn main() {
         // --- DRAW ---
         clear_background(BLACK);
 
-        draw_poly_lines(player.pos.x, player.pos.y, player.sides, player.radius, player.rotation * 180. / std::f32::consts::PI, 2., player.color);
+        particle_system.draw();
+
+        let mut player_draw_color = player.color;
+        if player.invulnerable {
+             // Blink transparency effect
+             player_draw_color.a = if (get_time() * 10.0) as i32 % 2 == 0 { 0.5 } else { 0.2 };
+        }
+        draw_poly_lines(player.pos.x, player.pos.y, player.sides, player.radius, player.rotation * 180. / std::f32::consts::PI, 2., player_draw_color);
+
+        // Calculate direction vectors for visual effects
+        let rotation_rad = player.rotation;
+        let forward = vec2(rotation_rad.cos(), rotation_rad.sin());
+        
+        // --- 1. SHIP TIP HIGHLIGHT ---
+        // The "nose" is at the perimeter in the direction of rotation
+        let nose_pos = player.pos + forward * player.radius;
+        draw_circle(nose_pos.x, nose_pos.y, 3.0, RED);
+
+        // --- 2. ENGINE FLAME ---
+        // Only draw if thrusting and player is active
+        if is_key_down(KeyCode::Up) && player.active {
+            // The flame comes out of the back
+            // We use a slight offset so it looks like it's coming from the engine, not the center
+            let flame_base = player.pos - forward * (player.radius * 0.8);
+            
+            // Randomize flame length for flickering effect
+            let flickr_len = gen_range(10.0, 20.0);
+            let flame_tip = flame_base - forward * flickr_len;
+            
+            // Draw a simple triangle for the flame
+            // We need two side points at the base to make it a triangle
+            // Right vector is forward rotated 90 degrees
+            let right = vec2(forward.y, -forward.x);
+            let side_width = 5.0;
+            let p1 = flame_base + right * side_width;
+            let p2 = flame_base - right * side_width;
+            
+            draw_triangle(p1, p2, flame_tip, ORANGE);
+            draw_triangle(p1 + forward*2., p2 + forward*2., flame_tip + forward*5., YELLOW); // Inner flame
+        }
 
         for a in asteroids.iter() {
              draw_poly_lines(a.pos.x, a.pos.y, a.sides, a.radius, 0., 2., GRAY);
@@ -455,6 +790,23 @@ async fn main() {
         draw_text(&format!("Score: {}", score), 20., 55., 20., GREEN);
         draw_text(&format!("Lives: {}", lives), 20., 80., 20., RED);
         draw_text("Hyperspace: Shift | Quit: Esc", screen_width() - 300., 30., 20., BLUE);
+        if settings.show_fps {
+            draw_text(&format!("FPS: {}", get_fps()), screen_width() - 120., 55., 20., YELLOW);
+        }
+        
+        // --- SCANNER UI ---
+        if is_scanning {
+             draw_text("SCANNING SECTOR...", 20., 110., 20., SKYBLUE);
+             // Visualize the "work"
+             let dots = (get_time() * 5.0) as i32 % 4;
+             let bar = ".".repeat(dots as usize);
+             draw_text(&bar, 220., 110., 20., SKYBLUE);
+        } else if scan_message_timer > 0.0 {
+             draw_text(&scan_message, 20., 110., 20., YELLOW);
+             scan_message_timer -= get_frame_time();
+        } else {
+             draw_text("Press 'S' to Scan Sector", 20., 110., 15., GRAY);
+        }
 
         next_frame().await
     }

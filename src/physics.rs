@@ -52,6 +52,28 @@ mod tests {
     }
 
     #[test]
+    fn test_wrap_pos_on_edges() {
+        let w = 800.;
+        let h = 600.;
+
+        let pos_right_edge = vec2(w, 300.);
+        let wrapped_right_edge = wrap_pos(pos_right_edge, w, h);
+        assert_eq!(wrapped_right_edge.x, w);
+
+        let pos_left_edge = vec2(0., 300.);
+        let wrapped_left_edge = wrap_pos(pos_left_edge, w, h);
+        assert_eq!(wrapped_left_edge.x, 0.);
+
+        let pos_top_edge = vec2(300., 0.);
+        let wrapped_top_edge = wrap_pos(pos_top_edge, w, h);
+        assert_eq!(wrapped_top_edge.y, 0.);
+
+        let pos_bottom_edge = vec2(300., h);
+        let wrapped_bottom_edge = wrap_pos(pos_bottom_edge, w, h);
+        assert_eq!(wrapped_bottom_edge.y, h);
+    }
+
+    #[test]
     fn test_wrap_pos_outside() {
         let w = 800.;
         let h = 600.;
@@ -63,6 +85,14 @@ mod tests {
         let pos_left = vec2(-50., 100.);
         let wrapped_left = wrap_pos(pos_left, w, h);
         assert_eq!(wrapped_left.x, w);
+
+        let pos_bottom = vec2(100., 650.);
+        let wrapped_bottom = wrap_pos(pos_bottom, w, h);
+        assert_eq!(wrapped_bottom.y, 0.);
+
+        let pos_top = vec2(100., -10.);
+        let wrapped_top = wrap_pos(pos_top, w, h);
+        assert_eq!(wrapped_top.y, h);
     }
 
     #[test]
@@ -94,6 +124,29 @@ mod tests {
 
         assert!(check_extra_life(6500, &mut last_score));
         assert_eq!(last_score, 6000);
+    }
+
+    #[test]
+    fn test_extra_life_multiple_increments_over_time() {
+        let mut last_score = 0;
+        let mut lives = 3;
+
+        let scores = [1000, 2999, 3000, 3100, 6000, 9000];
+        for score in scores {
+            if check_extra_life(score, &mut last_score) {
+                lives += 1;
+            }
+        }
+
+        assert_eq!(last_score, 9000);
+        assert_eq!(lives, 6);
+    }
+
+    #[test]
+    fn test_extra_life_single_step_even_on_big_jump() {
+        let mut last_score = 0;
+        assert!(check_extra_life(9000, &mut last_score));
+        assert_eq!(last_score, 3000);
     }
 
     #[test]

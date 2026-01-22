@@ -1,3 +1,4 @@
+use macroquad::logging::{info, warn};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 use crate::components::*;
@@ -9,13 +10,25 @@ use crate::config::LevelConfig;
 pub fn load_level(config: &LevelConfig, asteroids: &mut Vec<Asteroid>, ufos: &mut Vec<Ufo>) {
     asteroids.clear();
     ufos.clear(); 
+    info!("Loading level: asteroids={}, speed_range=({:.1},{:.1}), size_mult={:.2}",
+        config.asteroid_count,
+        config.asteroid_speed_range.0,
+        config.asteroid_speed_range.1,
+        config.asteroid_size_mult
+    );
     
     for _ in 0..config.asteroid_count {
         let mut pos;
         // Ensure asteroids don't spawn on top of the player (center screen)
+        let mut attempts = 0;
         loop {
             pos = vec2(gen_range(0., screen_width()), gen_range(0., screen_height()));
             if pos.distance(vec2(screen_width()/2., screen_height()/2.)) > 150. {
+                break;
+            }
+            attempts += 1;
+            if attempts > 50 {
+                warn!("Spawn safety check exceeded 50 attempts; placing asteroid anyway.");
                 break;
             }
         }
@@ -31,4 +44,5 @@ pub fn load_level(config: &LevelConfig, asteroids: &mut Vec<Asteroid>, ufos: &mu
             sides: gen_range(5, 9),
         });
     }
+    info!("Level loaded. Asteroids spawned: {}", asteroids.len());
 }

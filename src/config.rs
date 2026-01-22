@@ -45,16 +45,45 @@ pub fn get_levels() -> Vec<LevelConfig> {
 }
 
 impl LevelConfig {
+    /// Returns a difficulty-scaled version of this config.
+    pub fn scaled(&self, speed_mult: f32, spawn_mult: f32) -> LevelConfig {
+        let mut cfg = LevelConfig {
+            asteroid_count: self.asteroid_count,
+            asteroid_speed_range: (
+                self.asteroid_speed_range.0 * speed_mult,
+                self.asteroid_speed_range.1 * speed_mult,
+            ),
+            asteroid_size_mult: self.asteroid_size_mult,
+            ufo_spawn_chance: (self.ufo_spawn_chance * spawn_mult).min(1.0),
+            ufo_speed: self.ufo_speed * speed_mult,
+        };
+
+        // Preserve validation expectations by clamping any negative multipliers
+        if cfg.asteroid_speed_range.0 < 0.0 { cfg.asteroid_speed_range.0 = 0.0; }
+        if cfg.asteroid_speed_range.1 < 0.0 { cfg.asteroid_speed_range.1 = 0.0; }
+        if cfg.ufo_speed < 0.0 { cfg.ufo_speed = 0.0; }
+        cfg
+    }
+
     /// Validates the configuration parameters to prevent runtime weirdness.
     pub fn validate(&self, level_idx: usize) -> Result<(), String> {
         if self.asteroid_count == 0 {
             return Err(format!("Level {}: Asteroid count must be greater than 0", level_idx + 1));
         }
+        if self.asteroid_speed_range.0 < 0.0 || self.asteroid_speed_range.1 < 0.0 {
+            return Err(format!("Level {}: Asteroid speeds must be non-negative", level_idx + 1));
+        }
         if self.asteroid_speed_range.0 > self.asteroid_speed_range.1 {
             return Err(format!("Level {}: Min asteroid speed cannot be greater than max speed", level_idx + 1));
         }
+        if self.asteroid_size_mult <= 0.0 {
+            return Err(format!("Level {}: Asteroid size multiplier must be > 0", level_idx + 1));
+        }
         if self.ufo_spawn_chance < 0.0 || self.ufo_spawn_chance > 1.0 {
             return Err(format!("Level {}: UFO spawn chance must be between 0.0 and 1.0", level_idx + 1));
+        }
+        if self.ufo_speed < 0.0 {
+            return Err(format!("Level {}: UFO speed must be non-negative", level_idx + 1));
         }
         Ok(())
     }
@@ -82,5 +111,57 @@ mod tests {
             ufo_speed: 1.0,
         };
         assert!(bad_config.validate(0).is_err());
+    }
+
+    #[test]
+    fn test_invalid_speeds() {
+        let bad_config = LevelConfig {
+            asteroid_count: 4,
+            asteroid_speed_range: (-1.0, 2.0),
+            asteroid_size_mult: 1.0,
+            ufo_spawn_chance: 0.5,
+            ufo_speed: 1.0,
+        };
+        assert!(bad_config.validate(0).is_err());
+    }
+
+    #[test]
+    fn test_invalid_size_multiplier() {
+        let bad_config = LevelConfig {
+            asteroid_count: 4,
+            asteroid_speed_range: (1.0, 2.0),
+            asteroid_size_mult: 0.0,
+            ufo_spawn_chance: 0.5,
+            ufo_speed: 1.0,
+        };
+        assert!(bad_config.validate(0).is_err());
+    }
+
+    #[test]
+    fn test_invalid_ufo_speed() {
+        let bad_config = LevelConfig {
+            asteroid_count: 4,
+            asteroid_speed_range: (1.0, 2.0),
+            asteroid_size_mult: 1.0,
+            ufo_spawn_chance: 0.5,
+            ufo_speed: -1.0,
+        };
+        assert!(bad_config.validate(0).is_err());
+    }
+
+    #[test]
+    fn test_scaled_config() {
+        let base = LevelConfig {
+            asteroid_count: 4,
+            asteroid_speed_range: (1.0, 2.0),
+            asteroid_size_mult: 1.0,
+            ufo_spawn_chance: 0.5,
+            ufo_speed: 2.0,
+        };
+        let scaled = base.scaled(1.2, 1.5);
+        assert_eq!(scaled.asteroid_speed_range.0, 1.2);
+        assert_eq!(scaled.asteroid_speed_range.1, 2.4);
+        assert_eq!(scaled.ufo_speed, 2.4);
+        assert_eq!(scaled.ufo_spawn_chance, 0.75);
     }
 }
